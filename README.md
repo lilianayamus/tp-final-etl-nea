@@ -191,3 +191,653 @@ La guía paso a paso está en `docs/guia-git.md`, dentro de la carpeta
 
 *Fuente de datos: INDEC, vía el portal de datos abiertos del Estado
 argentino (datos.gob.ar). IDs de series verificados el 2026-08-02.*
+
+
+
+# TP Final — Pipeline ETL de Exportaciones del NEA
+
+**Diplomatura en Data Analytics e IA Aplicada — UNNE / Extender**
+**Unidad II — Fundamentos de la Programación**
+
+---
+
+## 📌 Descripción del proyecto
+
+Este proyecto implementa un **pipeline ETL (Extract, Transform, Load)** para obtener, transformar, validar y almacenar información sobre las exportaciones de las provincias del **NEA argentino**.
+
+El pipeline utiliza datos públicos provenientes de la **API de Series de Tiempo de datos.gob.ar / INDEC** y genera un dataset analítico con información de:
+
+* Chaco
+* Corrientes
+* Formosa
+* Misiones
+
+El período analizado comprende los años **1993 a 2024** y la unidad de medida es **millones de dólares FOB (MUSD)**.
+
+El resultado final permite analizar la evolución de las exportaciones por provincia y destino, incorporando indicadores derivados para facilitar posteriores análisis y visualizaciones.
+
+---
+
+## 🎯 Objetivo
+
+Construir un proceso automatizado que permita:
+
+1. Extraer datos desde una API pública.
+2. Guardar los datos originales en formato JSON.
+3. Transformar los datos desde un formato ancho a uno analítico.
+4. Estandarizar regiones y categorías.
+5. Calcular indicadores derivados.
+6. Integrar información de exportaciones por rubro.
+7. Validar la calidad del dataset.
+8. Generar archivos finales en formatos CSV y JSON.
+9. Registrar cada ejecución del pipeline mediante un archivo de log.
+
+---
+
+## 🔄 Arquitectura del pipeline
+
+El proyecto está organizado en tres etapas principales:
+
+```text
+              API datos.gob.ar / INDEC
+                       │
+                       ▼
+                 ┌───────────┐
+                 │  EXTRACT  │
+                 │           │
+                 │ src/      │
+                 │ extract.py│
+                 └─────┬─────┘
+                       │
+                       ▼
+                  data/raw/
+                       │
+                       ▼
+                 ┌───────────┐
+                 │ TRANSFORM │
+                 │           │
+                 │ src/      │
+                 │transform.py
+                 └─────┬─────┘
+                       │
+                       ▼
+              Dataset analítico
+                       │
+                       ▼
+                 ┌───────────┐
+                 │   LOAD    │
+                 │           │
+                 │ src/      │
+                 │  load.py  │
+                 └─────┬─────┘
+                       │
+              ┌────────┼─────────┐
+              ▼        ▼         ▼
+             CSV      JSON      LOG
+```
+
+La ejecución completa se realiza desde:
+
+```bash
+python src/main.py
+```
+
+---
+
+## 📁 Estructura del proyecto
+
+```text
+tp-final-etl/
+│
+├── data/
+│   ├── raw/
+│   │   └── Datos originales descargados desde la API
+│   │
+│   └── processed/
+│       ├── exportaciones_nea.csv
+│       └── resumen.json
+│
+├── logs/
+│   └── pipeline.log
+│
+├── src/
+│   ├── config.py
+│   ├── extract.py
+│   ├── transform.py
+│   ├── load.py
+│   └── main.py
+│
+├── tests/
+│   └── test_transform.py
+│
+├── requirements.txt
+├── README.md
+└── .gitignore
+```
+
+---
+
+## 📊 Fuente de datos
+
+Los datos se obtienen de la **API de Series de Tiempo de datos.gob.ar**, utilizando información del **INDEC** sobre exportaciones provinciales.
+
+Se utilizan dos conjuntos de información:
+
+### Exportaciones por provincia y país de destino
+
+Permite obtener el valor de las exportaciones de cada provincia hacia diferentes destinos.
+
+### Exportaciones por provincia y rubro
+
+Permite identificar el rubro principal de exportación y calcular la participación de los **Productos primarios** sobre el total correspondiente a cada provincia y año.
+
+---
+
+## 🗺️ Cobertura del dataset
+
+| Característica    | Valor                                 |
+| ----------------- | ------------------------------------- |
+| Provincias        | Chaco, Corrientes, Formosa y Misiones |
+| Período           | 1993–2024                             |
+| Años              | 32                                    |
+| Unidad            | Millones de dólares FOB               |
+| Destinos          | 11 categorías                         |
+| Registros finales | 1.408                                 |
+| Columnas finales  | 13                                    |
+
+La estructura esperada surge de:
+
+```text
+4 provincias × 11 destinos × 32 años = 1.408 registros
+```
+
+---
+
+## 🔧 Etapa 1 — Extract
+
+El módulo `src/extract.py` se encarga de:
+
+* Conectarse a la API.
+* Descargar los datos correspondientes a las provincias.
+* Obtener información por destino y por rubro.
+* Manejar errores de conexión o ausencia de datos.
+* Guardar los datos originales en `data/raw/`.
+
+Para cada provincia se descargan:
+
+* 12 series relacionadas con destinos.
+* 4 series relacionadas con rubros.
+
+En total:
+
+```text
+4 provincias × 2 tipos de información = 8 descargas
+```
+
+La ejecución final confirmó:
+
+```text
+EXTRACT OK: 8 de 8 descargas
+```
+
+---
+
+## 🔄 Etapa 2 — Transform
+
+El módulo `src/transform.py` realiza las principales transformaciones del proyecto.
+
+### Conversión de formato ancho a largo
+
+Los datos originales se encuentran en formato ancho.
+
+Se transforman a una estructura donde cada registro representa:
+
+```text
+Año + Provincia + Destino + Valor
+```
+
+Los registros correspondientes al total (`__TOTAL__`) no se consideran destinos.
+
+El total provincial se conserva para utilizarlo posteriormente en los cálculos.
+
+---
+
+### Clasificación regional
+
+Cada destino se asigna a una región utilizando la configuración definida en `config.py`.
+
+Ejemplos:
+
+| Destino        | Región            |
+| -------------- | ----------------- |
+| Brasil         | Mercosur          |
+| Paraguay       | Mercosur          |
+| China          | Asia              |
+| Estados Unidos | América del Norte |
+| España         | Europa            |
+| Resto          | Otros             |
+
+Los destinos que no poseen una clasificación específica utilizan la región definida como predeterminada.
+
+---
+
+### Cálculo de década
+
+A partir del año se genera la columna:
+
+```text
+decada
+```
+
+Ejemplos:
+
+```text
+1993 → 1990s
+2007 → 2000s
+2024 → 2020s
+```
+
+---
+
+### Participación sobre el total provincial
+
+Se calcula qué porcentaje representa cada destino sobre el total de exportaciones de la provincia:
+
+```text
+participacion_pct =
+(valor_musd / total_provincia_musd) × 100
+```
+
+Se contempla el caso de valores nulos o de un total igual a cero para evitar divisiones inválidas.
+
+---
+
+### Variación interanual
+
+Se calcula la variación porcentual respecto del año anterior para cada combinación de:
+
+```text
+Provincia + Destino
+```
+
+La fórmula utilizada es:
+
+```text
+((valor_actual - valor_anterior) / valor_anterior) × 100
+```
+
+Cuando no existe un año anterior o el valor anterior es cero, la variación no se calcula.
+
+---
+
+### Ranking de destinos
+
+Los destinos se ordenan según su valor de exportación para cada:
+
+```text
+Provincia + Año
+```
+
+Se genera:
+
+```text
+ranking_destino
+```
+
+También se genera:
+
+```text
+es_top3
+```
+
+que indica si el destino se encuentra entre los tres primeros.
+
+---
+
+### Integración de información por rubro
+
+La información de exportaciones por rubro se transforma en un índice por:
+
+```text
+Provincia + Año
+```
+
+A partir de este índice se obtiene:
+
+* `rubro_principal`
+* `pp_participacion_pct`
+
+`rubro_principal` identifica el rubro con mayor participación.
+
+`pp_participacion_pct` representa la participación de **Productos primarios** en el total de exportaciones de la provincia y año correspondiente.
+
+---
+
+## 📋 Dataset final
+
+El archivo generado es:
+
+```text
+data/processed/exportaciones_nea.csv
+```
+
+Contiene las siguientes 13 columnas:
+
+| Columna                | Descripción                                         |
+| ---------------------- | --------------------------------------------------- |
+| `anio`                 | Año de la exportación                               |
+| `provincia`            | Provincia del NEA                                   |
+| `destino`              | País o categoría de destino                         |
+| `region_destino`       | Región a la que pertenece el destino                |
+| `valor_musd`           | Valor exportado en millones de dólares FOB          |
+| `total_provincia_musd` | Total de exportaciones de la provincia              |
+| `participacion_pct`    | Participación del destino sobre el total provincial |
+| `var_interanual_pct`   | Variación porcentual respecto del año anterior      |
+| `decada`               | Década correspondiente al año                       |
+| `ranking_destino`      | Posición del destino dentro de la provincia y año   |
+| `es_top3`              | Indica si el destino pertenece al Top 3             |
+| `rubro_principal`      | Principal rubro de exportación                      |
+| `pp_participacion_pct` | Participación de Productos primarios                |
+
+---
+
+## 🧪 Etapa 3 — Load y controles de calidad
+
+El módulo `src/load.py` valida el dataset antes de guardarlo.
+
+Se implementaron controles para:
+
+### 1. Cantidad de registros
+
+Se verifica que el dataset tenga como mínimo la cantidad de filas esperada.
+
+Resultado final:
+
+```text
+1408 filas
+```
+
+---
+
+### 2. Estructura de columnas
+
+Se verifica que estén presentes las 13 columnas definidas por el contrato de salida.
+
+Resultado:
+
+```text
+13 columnas correctas
+```
+
+---
+
+### 3. Unicidad
+
+Se verifica que no existan registros duplicados para la combinación de:
+
+```text
+Provincia + Año + Destino
+```
+
+Resultado:
+
+```text
+1408 claves únicas
+```
+
+---
+
+### 4. Rangos
+
+Se controlan valores fuera de rangos razonables.
+
+Resultado:
+
+```text
+0 valores fuera de rango
+```
+
+---
+
+### 5. Cobertura
+
+También se verifica la presencia de datos necesarios para los cálculos derivados.
+
+En la ejecución final:
+
+```text
+91 filas sin variación interanual
+```
+
+Esto es esperable porque corresponden a los primeros registros de cada serie, donde no existe un año anterior para realizar la comparación.
+
+No se detectaron filas sin información de rubro.
+
+---
+
+## 📈 Resultados de la ejecución
+
+La ejecución final del pipeline produjo:
+
+```text
+TRANSFORM OK: 1408 filas x 13 columnas
+
+LOAD:
+check OK | cantidad: 1408 filas
+check OK | columnas: las 13 del contrato
+check OK | unicidad: 1408 claves únicas
+check OK | rangos: 0 valores fuera de rango
+check OK | cobertura: 0 sin rubro
+```
+
+El dataset generado presenta:
+
+```text
+Valor mínimo: 0,00 MUSD
+Valor máximo: 399,14 MUSD
+Promedio:     20,17 MUSD
+```
+
+---
+
+## 🔎 Ejemplo de resultado
+
+Para **Chaco — 2024** se obtuvieron, entre otros, los siguientes resultados:
+
+### China
+
+```text
+Valor:             110,93 MUSD
+Total provincial:  401,74 MUSD
+Participación:      27,61 %
+Variación anual:    +46,36 %
+Ranking:             2
+Top 3:              Sí
+Región:             Asia
+Rubro principal:    Productos primarios
+```
+
+### Brasil
+
+```text
+Valor:              18,12 MUSD
+Total provincial:  401,74 MUSD
+Participación:       4,51 %
+Variación anual:    +30,45 %
+Ranking:             4
+Top 3:              No
+Región:             Mercosur
+Rubro principal:    Productos primarios
+```
+
+Estos indicadores permiten analizar no solamente cuánto exporta cada provincia, sino también **hacia dónde exporta, qué importancia tiene cada destino y cómo evoluciona en el tiempo**.
+
+---
+
+## 🧪 Tests
+
+El proyecto incluye pruebas automatizadas en:
+
+```text
+tests/test_transform.py
+```
+
+La ejecución se realiza mediante:
+
+```bash
+python tests/test_transform.py
+```
+
+Resultado final:
+
+```text
+Ran 19 tests
+
+OK (skipped=2)
+```
+
+Se obtuvieron:
+
+* **17 tests aprobados**
+* **2 tests opcionales omitidos**
+
+Los tests cubren, entre otros aspectos:
+
+* Conversión de formato.
+* Exclusión del total como destino.
+* Tratamiento de faltantes.
+* Conservación del total provincial.
+* Clasificación regional.
+* Cálculo de década.
+* Participación porcentual.
+* Variación interanual.
+* Ranking.
+* Identificación del Top 3.
+* Integración de información por rubro.
+
+---
+
+## ▶️ Ejecución
+
+Para ejecutar el pipeline completo:
+
+```bash
+python src/main.py
+```
+
+Para ejecutar las pruebas:
+
+```bash
+python tests/test_transform.py
+```
+
+El pipeline genera automáticamente:
+
+```text
+data/processed/exportaciones_nea.csv
+data/processed/resumen.json
+logs/pipeline.log
+```
+
+---
+
+## 📄 Resumen JSON
+
+Además del CSV, se genera:
+
+```text
+data/processed/resumen.json
+```
+
+Este archivo contiene información resumida de la ejecución:
+
+* Dataset.
+* Fuente.
+* Unidad de medida.
+* Fecha de generación.
+* Cantidad de filas.
+* Cantidad de columnas.
+* Período.
+* Provincias.
+* Estadísticas del valor exportado.
+* Resultado de los controles de calidad.
+
+---
+
+## 📝 Registro de ejecuciones
+
+Cada ejecución queda registrada en:
+
+```text
+logs/pipeline.log
+```
+
+Se comprobó la ejecución del pipeline dos veces de manera exitosa, quedando registradas ambas corridas.
+
+---
+
+## ⚙️ Configuración
+
+Los parámetros generales del proyecto se encuentran centralizados en:
+
+```text
+src/config.py
+```
+
+Entre ellos:
+
+* URL base de la API.
+* Tiempo máximo de espera.
+* Directorios.
+* Nombres de archivos de salida.
+* Regiones.
+* Cantidad de destinos para el Top N.
+* Período analizado.
+* Cantidad mínima esperada de registros.
+* Rangos razonables de valores.
+
+Esto permite separar la configuración de la lógica del pipeline y facilita futuras modificaciones.
+
+---
+
+## 🛡️ Manejo de errores
+
+El proyecto contempla situaciones como:
+
+* Falta de datos.
+* Errores de conexión con la API.
+* Valores nulos.
+* División por cero.
+* Datos fuera de rangos razonables.
+* Registros duplicados.
+* Estructura incorrecta del dataset.
+
+Los controles críticos detienen el proceso cuando se detecta una condición que compromete la calidad del resultado.
+
+---
+
+## 💡 Posibles usos del dataset
+
+El dataset final puede utilizarse como base para análisis y visualizaciones sobre:
+
+* Evolución de las exportaciones del NEA.
+* Comparación entre provincias.
+* Principales destinos de exportación.
+* Participación de cada destino.
+* Evolución interanual.
+* Ranking de destinos.
+* Identificación de destinos Top 3.
+* Distribución regional de los destinos.
+* Importancia de los Productos primarios.
+* Análisis histórico por década.
+
+---
+
+## 👩‍💻 Autora
+
+**Liliana Yamus**
+
+Diplomatura en Data Analytics e IA Aplicada
+UNNE / Extender
+
+Proyecto Final — Unidad II: Fundamentos de la Programación
