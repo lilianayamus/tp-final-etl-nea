@@ -4,17 +4,8 @@ LOAD — Quality checks y persistencia   *** PARCIALMENTE RESUELTO ***
 
 Dos responsabilidades, en este orden:
 
-  1. CHEQUEAR: validar el dataset antes de publicarlo. Si algo crítico
-     falla, cortamos: mejor no entregar nada que entregar un reporte roto.
-  2. GUARDAR: escribir el CSV (para personas), el resumen JSON (para
-     programas) y el log (para auditar).
-
-Te dejamos resuelto el guardado del CSV y dos de los quality checks.
-Faltan 4 TODOs (9 a 12), todos cortos.
-
-Idempotencia: el CSV y el JSON van en modo "w", así que correr el pipeline
-dos veces deja el mismo resultado. El log va en modo "a" porque un log ES
-un historial: ahí sí queremos que crezca.
+  1. CHEQUEAR: validar el dataset antes de publicarlo.
+  2. GUARDAR: escribir CSV, JSON y log.
 """
 
 import csv
@@ -30,74 +21,107 @@ from transform import COLUMNAS
 # ======================================================================
 # QUALITY CHECKS
 # ======================================================================
-def chequear_cantidad(filas, minimo=None):
-    """¿Tenemos todas las filas que esperábamos?  [RESUELTO — de ejemplo]
 
-    Fijate el patrón: devuelve una tupla (bool, mensaje). Todos los
-    checks tienen que devolver lo mismo para que validar() los trate igual.
-    """
+def chequear_cantidad(filas, minimo=None):
+    """Verifica que haya como mínimo la cantidad esperada de filas."""
     if minimo is None:
         minimo = config.MINIMO_FILAS_ESPERADAS
+
     ok = len(filas) >= minimo
+
     return ok, f"cantidad: {len(filas)} filas (mínimo esperado {minimo})"
 
 
 def chequear_columnas(filas):
-    """¿Todas las filas tienen exactamente las columnas del contrato?
-    [RESUELTO — de ejemplo]
-    """
+    """Verifica que todas las filas tengan las columnas del contrato."""
     esperadas = set(COLUMNAS)
+
     for fila in filas:
         if set(fila.keys()) != esperadas:
             faltan = esperadas - set(fila.keys())
-            return False, f"columnas: una fila no cumple el esquema (faltan {faltan})"
-    return True, f"columnas: las {len(COLUMNAS)} del contrato en todas las filas"
+
+            return (
+                False,
+                f"columnas: una fila no cumple el esquema "
+                f"(faltan {faltan})"
+            )
+
+    return (
+        True,
+        f"columnas: las {len(COLUMNAS)} del contrato en todas las filas"
+    )
 
 
 def chequear_unicidad(filas):
-    """¿Hay duplicados? La clave del dataset es (provincia, anio, destino).
+    """Verifica que no existan duplicados."""
+    claves = [
+        (
+            fila["provincia"],
+            fila["anio"],
+            fila["destino"]
+        )
+        for fila in filas
+    ]
 
-    Debe devolver (bool, mensaje), igual que los checks de arriba.
-    """
-    # TODO 9 --------------------------------------------------------------
-    # Pista: es el patrón del set que viste en la Clase 3. Armá la lista de
-    # claves (una tupla por fila) y compará len(lista) con len(set(lista)).
-    raise NotImplementedError("TODO 9: implementá chequear_unicidad()")
-    # ---------------------------------------------------------------------
+    ok = len(claves) == len(set(claves))
+
+    if ok:
+        mensaje = f"unicidad: {len(claves)} claves únicas"
+    else:
+        duplicados = len(claves) - len(set(claves))
+        mensaje = f"unicidad: hay {duplicados} filas duplicadas"
+
+    return ok, mensaje
 
 
 def chequear_rangos(filas):
-    """¿Los valores son plausibles?
+    """Verifica que los valores de exportación sean plausibles."""
+    fuera_de_rango = [
+        fila
+        for fila in filas
+        if (
+            fila["valor_musd"] is not None
+            and (
+                fila["valor_musd"] < 0
+                or fila["valor_musd"] > config.VALOR_MAXIMO_RAZONABLE
+            )
+        )
+    ]
 
-    Un valor negativo o mayor a config.VALOR_MAXIMO_RAZONABLE es
-    sospechoso: no existen exportaciones negativas.
-    """
-    # TODO 10 -------------------------------------------------------------
-    # Pista: una comprensión de lista con la condición al final te da
-    # directamente las filas fuera de rango; después mirás cuántas son.
-    raise NotImplementedError("TODO 10: implementá chequear_rangos()")
-    # ---------------------------------------------------------------------
+    ok = len(fuera_de_rango) == 0
+
+    mensaje = (
+        f"rangos: {len(fuera_de_rango)} valores fuera de rango "
+        f"(0–{config.VALOR_MAXIMO_RAZONABLE})"
+    )
+
+    return ok, mensaje
 
 
 def chequear_cobertura(filas):
-    """Advertencia (no crítica): ¿cuántos nulos quedaron en las derivadas?
-    [RESUELTO]
-    """
-    sin_variacion = sum(1 for f in filas if f["var_interanual_pct"] is None)
-    sin_rubro = sum(1 for f in filas if f["rubro_principal"] is None)
+    """Verifica la cobertura de las columnas derivadas."""
+    sin_variacion = sum(
+        1
+        for f in filas
+        if f["var_interanual_pct"] is None
+    )
+
+    sin_rubro = sum(
+        1
+        for f in filas
+        if f["rubro_principal"] is None
+    )
+
     ok = sin_rubro == 0
-    return ok, (f"cobertura: {sin_variacion} filas sin variación interanual "
-                f"(esperable en el primer año), {sin_rubro} sin rubro")
+
+    return ok, (
+        f"cobertura: {sin_variacion} filas sin variación interanual "
+        f"(esperable en el primer año), {sin_rubro} sin rubro"
+    )
 
 
 def validar(filas):
-    """Corre todos los checks.  [RESUELTO]
-
-    Los CRÍTICOS cortan el pipeline lanzando una excepción ("fallar
-    temprano y ruidosamente"). La cobertura solo deja una advertencia.
-
-    Retorna una lista de dicts con el detalle, para el resumen JSON.
-    """
+    """Corre todos los quality checks y detiene el proceso si falla uno."""
     criticos = [
         chequear_cantidad(filas),
         chequear_columnas(filas),
@@ -106,16 +130,28 @@ def validar(filas):
     ]
 
     detalle = []
+
     for ok, mensaje in criticos:
-        detalle.append({"check": mensaje, "estado": "OK" if ok else "FALLO"})
+        detalle.append({
+            "check": mensaje,
+            "estado": "OK" if ok else "FALLO"
+        })
+
         if ok:
             logging.info("  check OK    | %s", mensaje)
         else:
             logging.error("  check FALLO | %s", mensaje)
-            raise ValueError(f"Quality check crítico falló -> {mensaje}")
+            raise ValueError(
+                f"Quality check crítico falló -> {mensaje}"
+            )
 
     ok, mensaje = chequear_cobertura(filas)
-    detalle.append({"check": mensaje, "estado": "OK" if ok else "AVISO"})
+
+    detalle.append({
+        "check": mensaje,
+        "estado": "OK" if ok else "AVISO"
+    })
+
     if ok:
         logging.info("  check OK    | %s", mensaje)
     else:
@@ -127,91 +163,171 @@ def validar(filas):
 # ======================================================================
 # PERSISTENCIA
 # ======================================================================
+
 def guardar_csv(filas, carpeta=None, nombre=None):
-    """Escribe el dataset final. Modo 'w': cada corrida lo reemplaza.
-    [RESUELTO — usalo de modelo para el resto]
-    """
+    """Escribe el dataset final en CSV."""
     carpeta = carpeta or config.DIR_PROCESSED
     nombre = nombre or config.ARCHIVO_SALIDA_CSV
+
     os.makedirs(carpeta, exist_ok=True)
+
     ruta = os.path.join(carpeta, nombre)
 
-    with open(ruta, "w", newline="", encoding="utf-8") as f:
-        escritor = csv.DictWriter(f, fieldnames=COLUMNAS)
+    with open(
+        ruta,
+        "w",
+        newline="",
+        encoding="utf-8"
+    ) as f:
+        escritor = csv.DictWriter(
+            f,
+            fieldnames=COLUMNAS
+        )
+
         escritor.writeheader()
         escritor.writerows(filas)
 
-    logging.info("  CSV: %s (%s filas)", ruta, len(filas))
+    logging.info(
+        "  CSV: %s (%s filas)",
+        ruta,
+        len(filas)
+    )
+
     return ruta
 
 
 def construir_resumen(filas, detalle_checks):
-    """Arma el resumen del proceso: metadatos + estadísticas descriptivas.
+    """Construye el resumen técnico del dataset."""
+    valores = [
+        fila["valor_musd"]
+        for fila in filas
+        if fila["valor_musd"] is not None
+    ]
 
-    Este JSON es la "ficha técnica" del dataset: quien lo reciba tiene que
-    poder saber de dónde salió, cuándo y qué contiene, SIN abrir el CSV.
+    anios = [
+        fila["anio"]
+        for fila in filas
+        if fila["anio"] is not None
+    ]
 
-    CONTRATO: devolvé un dict que incluya al menos estas claves:
+    provincias = sorted({
+        fila["provincia"]
+        for fila in filas
+        if fila["provincia"] is not None
+    })
 
-        dataset            (str)  nombre descriptivo
-        fuente             (str)  de dónde salieron los datos
-        unidad             (str)  "millones de dólares FOB"
-        generado           (str)  fecha y hora de esta corrida
-        filas              (int)
-        columnas           (int)
-        periodo            (dict) {"desde": anio_min, "hasta": anio_max}
-        provincias         (list) ordenada
-        valor_musd         (dict) {"minimo":…, "maximo":…, "promedio":…}
-        quality_checks     (list) el detalle_checks que recibís
-    """
-    # TODO 11 -------------------------------------------------------------
-    # Pistas:
-    #   - Para la lista de valores: [f["valor_musd"] for f in filas]
-    #   - min(), max() y sum()/len() ya los conocés.
-    #   - Para provincias únicas y ordenadas: sorted({f["provincia"] for f in filas})
-    #   - Para la fecha: datetime.now().strftime("%Y-%m-%d %H:%M")
-    #   - Podés agregar más claves si querés (suma puntos en la rúbrica).
-    raise NotImplementedError("TODO 11: implementá construir_resumen()")
-    # ---------------------------------------------------------------------
+    if valores:
+        minimo = round(min(valores), 2)
+        maximo = round(max(valores), 2)
+        promedio = round(sum(valores) / len(valores), 2)
+    else:
+        minimo = None
+        maximo = None
+        promedio = None
+
+    if anios:
+        anio_min = min(anios)
+        anio_max = max(anios)
+    else:
+        anio_min = None
+        anio_max = None
+
+    resumen = {
+        "dataset": "Exportaciones del NEA por provincia y destino",
+        "fuente": "API de Series de Tiempo de datos.gob.ar / INDEC",
+        "unidad": "millones de dólares FOB",
+        "generado": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "filas": len(filas),
+        "columnas": len(COLUMNAS),
+        "periodo": {
+            "desde": anio_min,
+            "hasta": anio_max,
+        },
+        "provincias": provincias,
+        "valor_musd": {
+            "minimo": minimo,
+            "maximo": maximo,
+            "promedio": promedio,
+        },
+        "quality_checks": detalle_checks,
+    }
+
+    return resumen
 
 
 def guardar_resumen(resumen, carpeta=None, nombre=None):
-    """Escribe el resumen en JSON, legible por humanos y por programas.
+    """Guarda el resumen técnico en formato JSON."""
+    carpeta = carpeta or config.DIR_PROCESSED
+    nombre = nombre or config.ARCHIVO_SALIDA_JSON
 
-    Acordate de los dos argumentos que vimos: ensure_ascii=False para que
-    las tildes se guarden bien, e indent=2 para que sea legible.
-    """
-    # TODO 12a ------------------------------------------------------------
-    # Muy parecido a guardar_csv(), pero con json.dump().
-    raise NotImplementedError("TODO 12a: implementá guardar_resumen()")
-    # ---------------------------------------------------------------------
+    os.makedirs(carpeta, exist_ok=True)
+
+    ruta = os.path.join(carpeta, nombre)
+
+    with open(
+        ruta,
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(
+            resumen,
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    logging.info("  JSON: %s", ruta)
+
+    return ruta
 
 
 def escribir_log_corrida(resumen, carpeta=None, nombre=None):
-    """Agrega UNA línea al historial del pipeline.
+    """Agrega una línea al historial del pipeline."""
+    carpeta = carpeta or config.DIR_LOGS
+    nombre = nombre or config.ARCHIVO_LOG
 
-    Modo "a" (append): nunca borra lo anterior. Cada corrida deja su rastro.
-    Sugerencia de formato:
+    os.makedirs(carpeta, exist_ok=True)
 
-        2026-08-02 14:30 | OK | 1408 filas | 1993-2024
-    """
-    # TODO 12b ------------------------------------------------------------
-    raise NotImplementedError("TODO 12b: implementá escribir_log_corrida()")
-    # ---------------------------------------------------------------------
+    ruta = os.path.join(carpeta, nombre)
+
+    periodo = resumen["periodo"]
+
+    linea = (
+        f'{resumen["generado"]} | OK | '
+        f'{resumen["filas"]} filas | '
+        f'{periodo["desde"]}-{periodo["hasta"]}\n'
+    )
+
+    with open(
+        ruta,
+        "a",
+        encoding="utf-8"
+    ) as f:
+        f.write(linea)
+
+    logging.info("  LOG: %s", ruta)
+
+    return ruta
 
 
 def cargar(filas):
-    """CONTRATO: recibe las filas finales; valida y persiste las 3 salidas.
-    [RESUELTO]
-    """
+    """Valida y persiste las tres salidas."""
     logging.info("LOAD: validando")
+
     detalle = validar(filas)
 
     logging.info("LOAD: guardando")
+
     guardar_csv(filas)
-    resumen = construir_resumen(filas, detalle)
+
+    resumen = construir_resumen(
+        filas,
+        detalle
+    )
+
     guardar_resumen(resumen)
     escribir_log_corrida(resumen)
 
     logging.info("LOAD OK")
+
     return resumen
