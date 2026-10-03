@@ -815,6 +815,8 @@ El proyecto contempla situaciones como:
 Los controles críticos detienen el proceso cuando se detecta una condición que compromete la calidad del resultado.
 
 ---
+Nota sobre el ranking: el ranking se calcula ordenando los destinos por valor exportado de mayor a menor dentro de cada provincia y año, según la lógica definida en los tests. En el ejemplo de referencia de la consigna se muestran valores de ranking que no coinciden con ese criterio para Chaco 2024; el pipeline mantiene el criterio definido por la función y validado por test_ranking_por_provincia_y_anio.
+
 
 ## 💡 Posibles usos del dataset
 
